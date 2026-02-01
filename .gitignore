@@ -10,10 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-dist-electron
+dev-dist
+release
 *.local
-.env
-
 
 # Editor directories and files
 .vscode/*
@@ -25,3 +24,13 @@ dist-electron
 *.njsproj
 *.sln
 *.sw?
+
+# env
+.env
+.env.production
+.env.development
+.env.electron
+.env.production.example
+
+./scripts
+scripts
