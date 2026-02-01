@@ -146,8 +146,8 @@ const App = () => {
     <>
     <GlobalStyle />
     <AuthProvider>
-    <UpdateChecker />
     <AppContainer>
+      <UpdateChecker />
       {location.pathname === "/" && showBoot && (
         <Boot isAuth={isAuth} isLoaded={loaded} />
       )}

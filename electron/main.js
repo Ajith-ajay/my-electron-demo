@@ -39,18 +39,6 @@ const isDev = !app.isPackaged
 
 // ✅ Get backend URL from environment or use default
 const BACKEND_URL = process.env.VITE_API_URL || 'http://localhost:5000'
-console.log('[Electron] Backend URL:', BACKEND_URL)
-
-/* -------------------------------------------------- */
-/* ⚙️ CONFIGURE AUTO-UPDATER FOR GITHUB RELEASES */
-/* -------------------------------------------------- */
-// ✅ Configure to use GitHub releases (much simpler!)
-autoUpdater.setFeedURL({
-  provider: 'github',
-  owner: '4274-hari',
-  repo: 'QA-Examination-Platform',
-  token: process.env.GITHUB_TOKEN // Optional: for private repos
-})
 
 // ✅ Disable auto-download and auto-install for controlled updates
 autoUpdater.autoDownload = false
@@ -103,8 +91,6 @@ function createStaticServer() {
   const distPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'dist')
   
   const server = http.createServer((req, res) => {
-    console.log('[Static Server] Request:', req.method, req.url)
-    
     // Get requested path
     let filePath = req.url === '/' ? '/index.html' : req.url
     
@@ -113,8 +99,6 @@ function createStaticServer() {
     
     // Build full file path
     const fullPath = path.join(distPath, filePath)
-    
-    console.log('[Static Server] Serving:', fullPath)
     
     // Check if file exists
     if (existsSync(fullPath) && fullPath.includes('.')) {
@@ -131,14 +115,9 @@ function createStaticServer() {
         res.end('Internal Server Error')
       }
     } else {
-      // ✅ CRITICAL FIX: For SPA routing - ALWAYS serve index.html for non-file requests
-      // This includes routes like /QA/qaexam
       try {
         const indexPath = path.join(distPath, 'index.html')
         const content = readFileSync(indexPath)
-        
-        console.log('[Static Server] SPA Route - Serving index.html for:', req.url)
-        
         res.writeHead(200, { 'Content-Type': 'text/html' })
         res.end(content)
       } catch (err) {
@@ -163,11 +142,12 @@ async function createWindow() {
     width: 1200,
     height: 800,
     fullscreen: true,
-    // kiosk: !isDev,                 // blocks Alt+F4, Win key (partially)
-    // alwaysOnTop: !isDev,
+    kiosk: !isDev,                 // blocks Alt+F4, Win key (partially)
+    alwaysOnTop: !isDev,
     show: false,
     icon: path.join(__dirname, '../src/assets/icons/icon.ico'),
     webPreferences: {
+      devTools: isDev,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -175,6 +155,13 @@ async function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
     }
   })
+
+  win.setContentProtection(true)
+
+  win.on('minimize', e => e.preventDefault())
+  win.on('maximize', e => e.preventDefault())
+  win.on('unmaximize', e => e.preventDefault())
+  win.on('restore', e => e.preventDefault())
   
   /* -------------------------------------------------- */
   /* 🍪 CONFIGURE SESSION FOR COOKIES WITH MANUAL HANDLING */
@@ -246,12 +233,12 @@ async function createWindow() {
   /* -------------------------------------------------- */
   /* 🚫 HARD BLOCK DEVTOOLS (UNBYPASSABLE) */
   /* -------------------------------------------------- */
-  // if (!isDev) {
-  //   win.webContents.on('devtools-opened', () => {
-  //     win.webContents.closeDevTools()
-  //     app.quit() // tampering detected in production only
-  //   })
-  // }
+  if (!isDev) {
+    win.webContents.on('devtools-opened', () => {
+      win.webContents.closeDevTools()
+      app.quit() // tampering detected in production only
+    })
+  }
   
   /* -------------------------------------------------- */
   /* Show only when fully ready */
@@ -324,9 +311,9 @@ async function createWindow() {
   /* -------------------------------------------------- */
   /* 📋 CLIPBOARD WIPE (OS LEVEL) */
   /* -------------------------------------------------- */
-  // setInterval(() => {
-  //   clipboard.clear()
-  // }, 400)
+  setInterval(() => {
+    clipboard.clear()
+  }, 400)
 
   /* -------------------------------------------------- */
   /* 🔐 IPC HANDLERS FOR VIOLATION REGISTRATION */
@@ -347,8 +334,6 @@ async function createWindow() {
   /* -------------------------------------------------- */
   /* 🔄 AUTO-UPDATE IPC HANDLERS WITH RETRY LOGIC */
   /* -------------------------------------------------- */
-  
-  // ✅ ADDED: Helper function for retry logic with exponential backoff
   const checkForUpdatesWithRetry = async (retries = 0) => {
     try {
       const result = await autoUpdater.checkForUpdates()
@@ -359,7 +344,6 @@ async function createWindow() {
           UPDATE_RETRY_CONFIG.initialDelay * Math.pow(UPDATE_RETRY_CONFIG.backoffMultiplier, retries),
           UPDATE_RETRY_CONFIG.maxDelay
         )
-        console.log(`[Update] Retry ${retries + 1}/${UPDATE_RETRY_CONFIG.maxRetries} after ${delay}ms`)
         await new Promise(resolve => setTimeout(resolve, delay))
         return checkForUpdatesWithRetry(retries + 1)
       }
@@ -367,50 +351,39 @@ async function createWindow() {
     }
   }
 
-  // ✅ ADDED: Version validation helper
   const isValidVersion = (version) => {
-    // Check semantic versioning format (x.y.z)
     return /^\d+\.\d+\.\d+/.test(version)
   }
 
   ipcMain.handle('check-for-updates', async () => {
-    // ✅ FIXED: Allow updates in development for testing
-    console.log('[Update] Check requested. isDev:', isDev, 'Current version:', app.getVersion())
-    
     try {
       const result = await checkForUpdatesWithRetry()
       const currentVersion = app.getVersion()
       const updateVersion = result.updateInfo?.version
       
-      console.log('[Update] Check result:', { currentVersion, updateVersion, updateInfo: result.updateInfo })
-      
       // ✅ ADDED: Version validation
-      if (updateVersion && isValidVersion(updateVersion)) {
-        console.log(`[Update] Update available: ${currentVersion} -> ${updateVersion}`)
+      if (global.examRunning) {
+        return { available: false, message: 'Exam in progress' }
+      } else if (updateVersion && isValidVersion(updateVersion)) {
         return { available: true, info: result.updateInfo, currentVersion }
       } else {
-        console.log('[Update] No valid update version found')
         return { available: false, message: 'Invalid update version' }
       }
     } catch (error) {
-      console.error('[Update] Check failed after retries:', error)
       return { available: false, error: error.message }
     }
   })
 
   ipcMain.handle('download-update', async () => {
     try {
-      console.log('[Update] Starting download...')
       await autoUpdater.downloadUpdate()
       return { success: true }
     } catch (error) {
-      console.error('[Update] Download failed:', error)
       return { success: false, error: error.message }
     }
   })
 
   ipcMain.handle('install-update', () => {
-    console.log('[Update] Installing update...')
     autoUpdater.quitAndInstall(false, true)
   })
 
@@ -422,32 +395,26 @@ async function createWindow() {
   /* 🔄 AUTO-UPDATER EVENT HANDLERS */
   /* -------------------------------------------------- */
   autoUpdater.on('checking-for-update', () => {
-    console.log('[Update] Checking for updates...')
     win.webContents.send('update-checking')
   })
 
   autoUpdater.on('update-available', (info) => {
-    console.log('[Update] Update available:', info.version)
     win.webContents.send('update-available', info)
   })
 
   autoUpdater.on('update-not-available', (info) => {
-    console.log('[Update] App is up to date')
     win.webContents.send('update-not-available', info)
   })
 
   autoUpdater.on('download-progress', (progressObj) => {
-    console.log(`[Update] Download: ${Math.round(progressObj.percent)}%`)
     win.webContents.send('update-download-progress', progressObj)
   })
 
   autoUpdater.on('update-downloaded', (info) => {
-    console.log('[Update] Update downloaded, ready to install')
     win.webContents.send('update-downloaded', info)
   })
 
   autoUpdater.on('error', (err) => {
-    console.error('[Update] Error:', err)
     win.webContents.send('update-error', err.message)
   })
 
@@ -456,19 +423,10 @@ async function createWindow() {
   /* -------------------------------------------------- */
   if (isDev) {
     await win.loadURL('http://localhost:5173/')
-    
-    // ✅ Wait for React to be ready, then navigate
+
     win.webContents.once('did-finish-load', () => {
       setTimeout(() => {
-        win.webContents.executeJavaScript(`
-          if (window.location.pathname !== '/QA/qaexam') {
-            window.location.href = '/QA/qaexam';
-          }
-        `)
-        
-        // ✅ ADDED: Auto-check for updates even in dev mode
         setTimeout(() => {
-          console.log('[Electron] Auto-checking for updates (dev mode)...')
           autoUpdater.checkForUpdates().catch(err => {
             console.error('[Electron] Update check failed:', err)
           })
@@ -476,41 +434,22 @@ async function createWindow() {
       }, 500)
     })
   } else {
-    // Production: Start local HTTP server and load from it
     staticServer = createStaticServer()
     
-    // Wait for server to start
     await new Promise(resolve => setTimeout(resolve, 100))
     
     const port = staticServer.address().port
     const serverUrl = `http://127.0.0.1:${port}`
-    
-    console.log('[Electron] Static server running at:', serverUrl)
-    
-    // ✅ Load root first
+
     await win.loadURL(serverUrl)
     
-    // ✅ Wait for React to be ready, then navigate to /QA/qaexam and auto-check updates
     win.webContents.once('did-finish-load', () => {
       setTimeout(() => {
-        win.webContents.executeJavaScript(`
-          console.log('[Electron] Current path:', window.location.pathname);
-          if (window.location.pathname !== '/QA/qaexam') {
-            console.log('[Electron] Navigating to /QA/qaexam');
-            window.location.href = '/QA/qaexam';
-          }
-        `)
-        // ✅ ADDED: Auto-check for updates on app startup (after 2 seconds)
         setTimeout(() => {
-          console.log('[Electron] Auto-checking for updates on startup...')
           autoUpdater.checkForUpdates()
         }, 2000)
-      }, 500) // Give React Router time to initialize
+      }, 500) 
     })
-    // ✅ FIXED: Remove devtools in production
-    if (isDev) {
-      win.webContents.openDevTools({ mode: 'detach' })
-    }
   }
   return win
 }
